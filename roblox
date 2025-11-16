@@ -1,0 +1,279 @@
+-- Luau Exploit Trading Enhancement Script
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Library = ReplicatedStorage:WaitForChild("Library")
+
+-- Required modules
+local Types = require(Library.Items.Types)
+local TradingCmds = require(Library.Client.TradingCmds)
+local InventoryCmds = require(Library.Client.InventoryCmds)
+local Pets = Types.Pet
+
+-- Enhanced trading functions
+local TradingExploit = {}
+
+-- Cache for faster lookups
+TradingExploit.PetCache = {}
+TradingExploit.LastCacheUpdate = 0
+TradingExploit.CacheTTL = 30 -- seconds
+
+function TradingExploit:UpdatePetCache()
+    local currentTime = tick()
+    if currentTime - self.LastCacheUpdate > self.CacheTTL then
+        self.PetCache = {}
+        local allPets = Pets:All()
+        
+        for uid, pet in pairs(allPets) do
+            local petDir = pet:Directory()
+            if petDir and petDir.name then
+                local petName = petDir.name:lower()
+                if not self.PetCache[petName] then
+                    self.PetCache[petName] = {}
+                end
+                table.insert(self.PetCache[petName], {
+                    uid = uid,
+                    pet = pet,
+                    exclusiveLevel = pet:GetExclusiveLevel() or 0,
+                    isLocked = pet:IsLocked(),
+                    isTradable = pet:IsTradable()
+                })
+            end
+        end
+        self.LastCacheUpdate = currentTime
+        print("Pet cache updated with", #self.PetCache, "unique pet types")
+    end
+end
+
+function TradingExploit:GetPetUIDByName(petName, options)
+    options = options or {}
+    local exactMatch = options.exactMatch or false
+    local allowLocked = options.allowLocked or false
+    local minExclusiveLevel = options.minExclusiveLevel or 0
+    
+    self:UpdatePetCache()
+    
+    local searchName = petName:lower()
+    local matches = {}
+    
+    for cachedName, pets in pairs(self.PetCache) do
+        local isMatch = false
+        if exactMatch then
+            isMatch = (cachedName == searchName)
+        else
+            isMatch = cachedName:find(searchName) ~= nil
+        end
+        
+        if isMatch then
+            for _, petData in ipairs(pets) do
+                if (allowLocked or not petData.isLocked) and 
+                   petData.exclusiveLevel >= minExclusiveLevel and
+                   petData.isTradable then
+                    table.insert(matches, petData)
+                end
+            end
+        end
+    end
+    
+    if #matches > 0 then
+        -- Sort by exclusive level (highest first)
+        table.sort(matches, function(a, b)
+            return a.exclusiveLevel > b.exclusiveLevel
+        end)
+        
+        local bestMatch = matches[1]
+        print("Found pet:", bestMatch.pet:Directory().name, "UID:", bestMatch.uid, 
+              "Exclusive Level:", bestMatch.exclusiveLevel)
+        return bestMatch.uid, bestMatch.pet
+    end
+    
+    print("No matching pets found for:", petName)
+    return nil
+end
+
+function TradingExploit:TradeMultiplePets(petNames, quantities)
+    quantities = quantities or {}
+    local results = {}
+    
+    -- First, verify all pets exist and are tradable
+    local petData = {}
+    for i, petName in ipairs(petNames) do
+        local uid, pet = self:GetPetUIDByName(petName, {
+            exactMatch = true,
+            allowLocked = false
+        })
+        
+        if not uid then
+            return false, "Pet not found or not tradable: " .. petName
+        end
+        
+        local quantity = quantities[i] or 1
+        if quantity > pet:GetAmount() then
+            return false, "Not enough " .. petName .. " (have " .. pet:GetAmount() .. ", need " .. quantity .. ")"
+        end
+        
+        table.insert(petData, {
+            name = petName,
+            uid = uid,
+            quantity = quantity,
+            pet = pet
+        })
+    end
+    
+    -- Add pets to trade
+    for _, data in ipairs(petData) do
+        local success, errorMsg = TradingCmds.SetItem("Pet", data.uid, data.quantity)
+        if not success then
+            return false, "Failed to add " .. data.name .. " to trade: " .. (errorMsg or "Unknown error")
+        end
+        results[data.name] = true
+        print("Successfully added", data.quantity, data.name, "to trade")
+    end
+    
+    return true, results
+end
+
+function TradingExploit:AutoTradeBestPets(limit)
+    limit = limit or TradingCmds.GetState() and TradingCmds.GetState()._itemLimit or 10
+    
+    self:UpdatePetCache()
+    
+    -- Get all tradable pets sorted by exclusive level
+    local tradablePets = {}
+    for _, pets in pairs(self.PetCache) do
+        for _, petData in ipairs(pets) do
+            if petData.isTradable and not petData.isLocked then
+                table.insert(tradablePets, petData)
+            end
+        end
+    end
+    
+    -- Sort by exclusive level (highest first)
+    table.sort(tradablePets, function(a, b)
+        return a.exclusiveLevel > b.exclusiveLevel
+    end)
+    
+    -- Add top pets to trade
+    local added = 0
+    local results = {}
+    
+    for i = 1, math.min(limit, #tradablePets) do
+        local petData = tradablePets[i]
+        local success, errorMsg = TradingCmds.SetItem("Pet", petData.uid, 1)
+        
+        if success then
+            added = added + 1
+            results[petData.pet:Directory().name] = true
+            print("Added", petData.pet:Directory().name, "to trade (Exclusive Level:", petData.exclusiveLevel, ")")
+        else
+            print("Failed to add", petData.pet:Directory().name, ":", errorMsg)
+        end
+    end
+    
+    return added, results
+end
+
+function TradingExploit:GetTradeStatus()
+    local state = TradingCmds.GetState()
+    if not state then
+        return "No active trade"
+    end
+    
+    local status = {
+        tradeId = state._id,
+        player1Ready = state._ready[1],
+        player2Ready = state._ready[2],
+        player1Confirmed = state._confirmed[1],
+        player2Confirmed = state._confirmed[2],
+        itemsCount = 0,
+        executing = state._executing or false
+    }
+    
+    -- Count items in trade
+    if state._items then
+        for playerIndex, items in pairs(state._items) do
+            for itemType, itemList in pairs(items) do
+                status.itemsCount = status.itemsCount + Functions.GetDictionaryLength(itemList)
+            end
+        end
+    end
+    
+    return status
+end
+
+function TradingExploit:ListAllPets()
+    self:UpdatePetCache()
+    
+    local petList = {}
+    for petName, pets in pairs(self.PetCache) do
+        local totalCount = 0
+        local maxExclusive = 0
+        local tradableCount = 0
+        
+        for _, petData in ipairs(pets) do
+            totalCount = totalCount + petData.pet:GetAmount()
+            maxExclusive = math.max(maxExclusive, petData.exclusiveLevel)
+            if petData.isTradable and not petData.isLocked then
+                tradableCount = tradableCount + petData.pet:GetAmount()
+            end
+        end
+        
+        table.insert(petList, {
+            name = petName,
+            total = totalCount,
+            tradable = tradableCount,
+            maxExclusive = maxExclusive
+        })
+    end
+    
+    -- Sort alphabetically
+    table.sort(petList, function(a, b)
+        return a.name < b.name
+    end)
+    
+    return petList
+end
+
+-- Enhanced version of your original function
+function getPetUIDByName(petName)
+    return TradingExploit:GetPetUIDByName(petName, {exactMatch = true})
+end
+
+-- Usage examples:
+local function exampleUsage()
+    -- Your original usage
+    local petUID = getPetUIDByName("Huge Hell Rock")
+    if petUID then
+        local success, error = TradingCmds.SetItem("Pet", petUID, 1)
+        print("Trade result:", success, error)
+    end
+    
+    -- New enhanced usage
+    -- Trade multiple specific pets
+    local success, result = TradingExploit:TradeMultiplePets(
+        {"Huge Hell Rock", "Titanic Christmas Present"}, 
+        {1, 1}
+    )
+    
+    -- Auto-trade best pets
+    local added, petsAdded = TradingExploit:AutoTradeBestPets(5)
+    print("Auto-traded", added, "pets")
+    
+    -- List all pets
+    local allPets = TradingExploit:ListAllPets()
+    for _, pet in ipairs(allPets) do
+        print(pet.name, "- Total:", pet.total, "Tradable:", pet.tradable, "Max Exclusive:", pet.maxExclusive)
+    end
+    
+    -- Get trade status
+    local status = TradingExploit:GetTradeStatus()
+    print("Trade status:", status)
+end
+
+-- Make functions globally available
+getPetUIDByName = getPetUIDByName
+TradeMultiplePets = function(...) return TradingExploit:TradeMultiplePets(...) end
+AutoTradeBestPets = function(...) return TradingExploit:AutoTradeBestPets(...) end
+ListAllPets = function() return TradingExploit:ListAllPets() end
+GetTradeStatus = function() return TradingExploit:GetTradeStatus() end
+
+return TradingExploit
