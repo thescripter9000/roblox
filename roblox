@@ -11,14 +11,81 @@ local Functions = require(Library.Functions)
 
 local LocalPlayer = Players.LocalPlayer
 
+function getPetRarity(pet)
+    if not pet then
+        return "Unknown"
+    end
+    
+    -- Try multiple methods to get rarity
+    local rarity = "Unknown"
+    
+    -- Method 1: Try GetRarity method
+    local success1, rarity1 = pcall(function()
+        return pet:GetRarity()
+    end)
+    if success1 and rarity1 then
+        rarity = rarity1
+        return rarity
+    end
+    
+    -- Method 2: Try GetTier method
+    local success2, tier = pcall(function()
+        return pet:GetTier()
+    end)
+    if success2 and tier then
+        rarity = tostring(tier)
+        return rarity
+    end
+    
+    -- Method 3: Check for rarity in directory info
+    local success3, petInfo = pcall(function()
+        return pet:Directory()
+    end)
+    if success3 and petInfo and petInfo.rarity then
+        rarity = petInfo.rarity
+        return rarity
+    end
+    
+    -- Method 4: Check for exclusive level (for exclusive pets)
+    local success4, exclusiveLevel = pcall(function()
+        return pet:GetExclusiveLevel()
+    end)
+    if success4 and exclusiveLevel and exclusiveLevel > 0 then
+        rarity = "Exclusive Level " .. exclusiveLevel
+        return rarity
+    end
+    
+    -- Method 5: Check pet name for common rarity indicators
+    local success5, petName = pcall(function()
+        return pet:GetId() or ""
+    end)
+    if success5 then
+        local nameLower = petName:lower()
+        if nameLower:find("huge") or nameLower:find("titanic") then
+            rarity = "Huge"
+        elseif nameLower:find("exclusive") then
+            rarity = "Exclusive"
+        elseif nameLower:find("rainbow") then
+            rarity = "Rainbow"
+        elseif nameLower:find("golden") or nameLower:find("gold") then
+            rarity = "Golden"
+        elseif nameLower:find("dark matter") then
+            rarity = "Dark Matter"
+        end
+    end
+    
+    return rarity
+end
+
 function getAllPetUIDsSilent()
     local allPets = {}
+    local duplicateCount = 0
     
     -- Get the inventory container
     local container = InventoryCmds.Container()
     if not container then
         warn("No inventory container found")
-        return allPets
+        return allPets, duplicateCount
     end
     
     -- Get all pets from inventory
@@ -31,8 +98,11 @@ function getAllPetUIDsSilent()
                 return pet:Directory()
             end)
             
+            local petName = nil
+            local petRarity = getPetRarity(pet)
+            
             if success and petInfo and petInfo.name then
-                allPets[petInfo.name] = uid
+                petName = petInfo.name
             else
                 -- Try alternative method to get pet name
                 local altNameSuccess, altName = pcall(function()
@@ -40,25 +110,58 @@ function getAllPetUIDsSilent()
                 end)
                 
                 if altNameSuccess then
-                    allPets[altName] = uid
+                    petName = altName
                 else
-                    allPets["Unnamed_" .. uid] = uid
+                    petName = "Unnamed_" .. uid
                 end
+            end
+            
+            -- Create pet data table with name, UID, and rarity
+            local petData = {
+                uid = uid,
+                rarity = petRarity
+            }
+            
+            -- Check for duplicates
+            if allPets[petName] then
+                duplicateCount = duplicateCount + 1
+                -- If this is the first duplicate, convert to array
+                if type(allPets[petName]) == "table" and allPets[petName].uid then
+                    local originalPet = allPets[petName]
+                    allPets[petName] = {originalPet}
+                end
+                -- Add duplicate pet data to array
+                table.insert(allPets[petName], petData)
+            else
+                allPets[petName] = petData
             end
         end
     end
     
-    return allPets
+    return allPets, duplicateCount
 end
 
 -- EXACT MATCH SEARCH - Only returns if name matches exactly
 function getPetUIDByNameExact(petName)
-    local allPets = getAllPetUIDsSilent()
+    local allPets, duplicateCount = getAllPetUIDsSilent()
     
-    for name, uid in pairs(allPets) do
-        if name == petName then  -- Exact match, case-sensitive
-            print("Found exact pet:", name, "UID:", uid)
-            return uid
+    if duplicateCount > 0 then
+        print("Warning: Found", duplicateCount, "duplicate pet names in inventory")
+    end
+    
+    if allPets[petName] then
+        if type(allPets[petName]) == "table" and allPets[petName][1] and allPets[petName][1].uid then
+            -- Multiple pets with same name found
+            local totalPets = #allPets[petName]
+            print("Found", totalPets, "pets with exact name:", petName)
+            for i, petData in ipairs(allPets[petName]) do
+                print(string.format("  %d. UID: %s | Rarity: %s", i, petData.uid, petData.rarity))
+            end
+            return allPets[petName][1].uid -- Return first one by default
+        elseif allPets[petName].uid then
+            -- Single pet found
+            print("Found exact pet:", petName, "UID:", allPets[petName].uid, "| Rarity:", allPets[petName].rarity)
+            return allPets[petName].uid
         end
     end
     
@@ -66,14 +169,63 @@ function getPetUIDByNameExact(petName)
     return nil
 end
 
+-- EXACT MATCH SEARCH - Returns ALL matching UIDs
+function getAllPetUIDsByNameExact(petName)
+    local allPets, duplicateCount = getAllPetUIDsSilent()
+    
+    if duplicateCount > 0 then
+        print("Warning: Found", duplicateCount, "duplicate pet names in inventory")
+    end
+    
+    if allPets[petName] then
+        if type(allPets[petName]) == "table" and allPets[petName][1] and allPets[petName][1].uid then
+            -- Multiple pets with same name found
+            local totalPets = #allPets[petName]
+            print("Found", totalPets, "pets with exact name:", petName)
+            local uids = {}
+            for i, petData in ipairs(allPets[petName]) do
+                print(string.format("  %d. UID: %s | Rarity: %s", i, petData.uid, petData.rarity))
+                table.insert(uids, petData.uid)
+            end
+            return uids
+        elseif allPets[petName].uid then
+            -- Single pet found
+            local totalPets = 1
+            print("Found exact pet:", petName, "UID:", allPets[petName].uid, "| Rarity:", allPets[petName].rarity)
+            print("Total pets named '" .. petName .. "':", totalPets)
+            return {allPets[petName].uid}
+        end
+    end
+    
+    print("Pet not found with exact name:", petName)
+    return {}
+end
+
 -- CASE-INSENSITIVE EXACT MATCH
 function getPetUIDByNameExactIgnoreCase(petName)
-    local allPets = getAllPetUIDsSilent()
+    local allPets, duplicateCount = getAllPetUIDsSilent()
     
-    for name, uid in pairs(allPets) do
+    if duplicateCount > 0 then
+        print("Warning: Found", duplicateCount, "duplicate pet names in inventory")
+    end
+    
+    for name, petData in pairs(allPets) do
         if name:lower() == petName:lower() then  -- Exact match, case-insensitive
-            print("Found exact pet (case-insensitive):", name, "UID:", uid)
-            return uid
+            if type(petData) == "table" and petData[1] and petData[1].uid then
+                -- Multiple pets with same name found
+                local totalPets = #petData
+                print("Found", totalPets, "pets with exact name (case-insensitive):", name)
+                for i, data in ipairs(petData) do
+                    print(string.format("  %d. UID: %s | Rarity: %s", i, data.uid, data.rarity))
+                end
+                return petData[1].uid -- Return first one by default
+            elseif petData.uid then
+                -- Single pet found
+                local totalPets = 1
+                print("Found exact pet (case-insensitive):", name, "UID:", petData.uid, "| Rarity:", petData.rarity)
+                print("Total pets named '" .. name .. "':", totalPets)
+                return petData.uid
+            end
         end
     end
     
@@ -83,84 +235,61 @@ end
 
 -- PARTIAL MATCH SEARCH
 function getPetUIDByName(petName)
-    local allPets = getAllPetUIDsSilent()
+    local allPets, duplicateCount = getAllPetUIDsSilent()
+    local matches = {}
     
-    for name, uid in pairs(allPets) do
+    if duplicateCount > 0 then
+        print("Warning: Found", duplicateCount, "duplicate pet names in inventory")
+    end
+    
+    for name, petData in pairs(allPets) do
         if name:lower():find(petName:lower()) then
-            print("Found partial match pet:", name, "UID:", uid)
-            return uid
+            if type(petData) == "table" and petData[1] and petData[1].uid then
+                -- Multiple pets with same name
+                for _, data in ipairs(petData) do
+                    table.insert(matches, {name = name, uid = data.uid, rarity = data.rarity})
+                end
+            elseif petData.uid then
+                -- Single pet
+                table.insert(matches, {name = name, uid = petData.uid, rarity = petData.rarity})
+            end
         end
+    end
+    
+    if #matches > 0 then
+        print("Found", #matches, "partial matches for:", petName)
+        for i, match in ipairs(matches) do
+            print(string.format("  %d. %s - UID: %s | Rarity: %s", i, match.name, match.uid, match.rarity))
+        end
+        return matches[1].uid -- Return first match by default
     end
     
     print("Pet not found with partial match:", petName)
     return nil
 end
 
-function tradePet(petName, targetPlayer)
-    -- Verify target player exists
-    local target = Players:FindFirstChild(targetPlayer)
-    if not target then
-        warn("Target player not found:", targetPlayer)
-        return false
-    end
-    
-    -- Get pet UID using EXACT match
-    local petUID = getPetUIDByNameExact(petName)
-    if not petUID then
-        warn("Pet not found in inventory:", petName)
-        return false
-    end
-    
-    -- Safe pet retrieval
-    local pet, petErr = pcall(function()
-        return Types.Pet:Get(petUID)
-    end)
-    
-    if not pet or not petErr then
-        warn("Failed to retrieve pet:", petUID)
-        return false
-    end
-    
-    pet = petErr -- Get the actual pet object
-    
-    -- Check if we can trade the pet
-    local canTrade, reason = TradingCmds.CanTrade(pet)
-    if not canTrade then
-        warn("Cannot trade pet:", reason)
-        return false
-    end
-    
-    -- Send trade request
-    local success, errorMsg = TradingCmds.Request(target)
-    if not success then
-        warn("Trade request failed:", errorMsg)
-        return false
-    end
-    
-    print("Trade request sent to", targetPlayer)
-    
-    -- Wait for trade to be created
-    wait(2)
-    
-    -- Add pet to trade
-    local tradeSuccess, tradeError = TradingCmds.SetItem("Pet", petUID, 1)
-    if not tradeSuccess then
-        warn("Failed to add pet to trade:", tradeError)
-        return false
-    end
-    
-    print("Successfully added", petName, "to trade with", targetPlayer)
-    return true
-end
-
 function listAllPets()
     print("=== ALL PETS IN INVENTORY ===")
-    local allPets = getAllPetUIDsSilent()
+    local allPets, duplicateCount = getAllPetUIDsSilent()
+    
+    if duplicateCount > 0 then
+        print("Warning: Found", duplicateCount, "duplicate pet names in inventory")
+    end
     
     local count = 0
-    for name, uid in pairs(allPets) do
-        count = count + 1
-        print(string.format("%d. %s - UID: %s", count, name, uid))
+    for name, petData in pairs(allPets) do
+        if type(petData) == "table" and petData[1] and petData[1].uid then
+            -- Multiple pets with same name
+            local totalPets = #petData
+            for i, data in ipairs(petData) do
+                count = count + 1
+                print(string.format("%d. %s - UID: %s | Rarity: %s (Instance %d/%d)", count, name, data.uid, data.rarity, i, totalPets))
+            end
+        elseif petData.uid then
+            -- Single pet
+            count = count + 1
+            print(string.format("%d. %s - UID: %s | Rarity: %s", count, name, petData.uid, petData.rarity))
+        end
     end
     
     print(string.format("Total pets: %d", count))
@@ -173,6 +302,7 @@ function simpleGetPetUIDExact(petName)
     if not container then return nil end
     
     local pets = container:All(Types.Pet)
+    local matches = {}
     
     for uid, pet in pairs(pets) do
         if pet then
@@ -200,14 +330,109 @@ function simpleGetPetUIDExact(petName)
             
             -- EXACT MATCH check
             if name and name == petName then
-                print("Found exact pet:", name, "UID:", uid)
-                return uid
+                local rarity = getPetRarity(pet)
+                table.insert(matches, {uid = uid, rarity = rarity})
             end
         end
     end
     
+    if #matches > 0 then
+        local totalPets = #matches
+        if totalPets > 1 then
+            print("Found", totalPets, "pets with exact name:", petName)
+            for i, match in ipairs(matches) do
+                print(string.format("  %d. UID: %s | Rarity: %s", i, match.uid, match.rarity))
+            end
+        else
+            print("Found exact pet:", petName, "UID:", matches[1].uid, "| Rarity:", matches[1].rarity)
+            print("Total pets named '" .. petName .. "':", totalPets)
+        end
+        return matches[1].uid -- Return first one by default
+    end
+    
     print("Pet not found with exact name:", petName)
     return nil
+end
+
+-- TRADE MANAGEMENT FUNCTIONS
+function checkCurrentTrade()
+    local currentTradeState = TradingCmds.GetState()
+    
+    if currentTradeState then
+        print("=== ACTIVE TRADE DETECTED ===")
+        print("Trade ID:", currentTradeState._id)
+        print("Trade Counter:", currentTradeState._counter)
+        print("Trade Ready Timer:", currentTradeState._readyTimer)
+        print("Trade Executing:", currentTradeState._executing)
+        
+        -- Check ready status
+        if currentTradeState._ready then
+            print("Ready Status - Player 1:", currentTradeState._ready[1])
+            print("Ready Status - Player 2:", currentTradeState._ready[2])
+        end
+        
+        return currentTradeState
+    else
+        print("No active trade detected")
+        return nil
+    end
+end
+
+function addPetToTrade(petName)
+    local currentTradeState = TradingCmds.GetState()
+    
+    if not currentTradeState then
+        print("No active trade to add pet to")
+        return false
+    end
+    
+    print("=== ADDING PET TO TRADE ===")
+    print("Trade ID:", currentTradeState._id)
+    print("Trade Counter:", currentTradeState._counter)
+    
+    -- Get the pet UID
+    local petUID = getPetUIDByNameExact(petName)
+    if not petUID then
+        print("Pet not found:", petName)
+        return false
+    end
+    
+    -- Use the TradingCmds.SetItem function to add pet to trade
+    local success, errorMessage = TradingCmds.SetItem("Pet", petUID, 1)
+    
+    if success then
+        print("✅ Item selected successfully!")
+        print("Pet:", petName, "UID:", petUID, "added to trade")
+        return true
+    else
+        print("❌ Error selecting item:", errorMessage)
+        return false
+    end
+end
+
+function addSpecificPetToTrade(petUID)
+    local currentTradeState = TradingCmds.GetState()
+    
+    if not currentTradeState then
+        print("No active trade to add pet to")
+        return false
+    end
+    
+    print("=== ADDING SPECIFIC PET TO TRADE ===")
+    print("Trade ID:", currentTradeState._id)
+    print("Trade Counter:", currentTradeState._counter)
+    
+    -- Use the TradingCmds.SetItem function to add pet to trade
+    local success, errorMessage = TradingCmds.SetItem("Pet", petUID, 1)
+    
+    if success then
+        print("✅ Item selected successfully!")
+        print("Pet UID:", petUID, "added to trade")
+        return true
+    else
+        print("❌ Error selecting item:", errorMessage)
+        return false
+    end
 end
 
 -- Usage examples:
@@ -217,7 +442,32 @@ print("=== Pet Trading Exploit ===")
 print("\n--- Exact Match Search (Case-Sensitive) ---")
 local uid = getPetUIDByNameExact("Axolotl")
 if uid then
-    print("Found exact match Axolotl UID:", uid)
+    print("Using first match Axolotl UID:", uid)
 else
     print("No exact match found for 'Axolotl'")
 end
+
+-- Method 2: Get ALL matching UIDs
+print("\n--- Get All Matching UIDs ---")
+local allUids = getAllPetUIDsByNameExact("Axolotl")
+if #allUids > 0 then
+    print("Found", #allUids, "total pets named 'Axolotl'")
+end
+
+-- Method 3: Check current trade status
+print("\n--- Trade Status Check ---")
+local currentTrade = checkCurrentTrade()
+
+-- Method 4: Add pet to trade (if trade is active)
+if currentTrade then
+    print("\n--- Adding Pet to Trade ---")
+    -- Replace "Axolotl" with the actual pet name you want to trade
+    addPetToTrade("Axolotl")
+    
+    -- Or use a specific UID directly:
+    -- addSpecificPetToTrade("fcba454d8ac344b4bb7e4844222106bd")
+end
+
+-- Method 5: List all pets with rarities
+print("\n--- Listing All Pets with Rarities ---")
+listAllPets()
