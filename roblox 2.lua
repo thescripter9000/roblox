@@ -1,20 +1,20 @@
 -- Automated trade: wait for incoming request from target player, then accept, add pets, message, and ready.
 -- Settings
 local TARGET_PLAYER_NAME = "289012SPJ12" -- exact username of the player who should request you
-local PET_NAME = "Sungriffen"            -- pet display name to add
+local PET_NAME = "Huge Zombie Pig"            -- pet display name to add
 local DESIRED_RARITY_STRING = nil        -- e.g. "Mythical" or nil to ignore rarity check
 local VARIANT = {                        -- variant filters (set nil for "don't care")
-    shiny = nil,     -- true / false / nil
-    golden = nil,
-    rainbow = nil,
-    gargantuan = nil,
-    titanic = nil,
-    huge = nil,
+    shiny = false,     -- true / false / nil
+    golden = false,
+    rainbow = false,
+    gargantuan = false,
+    titanic = false,
+    huge = true,
 }
-local TRADE_PET_TOTAL = 5                -- total number of that pet to add to trade
+local TRADE_PET_TOTAL = 1                -- total number of that pet to add to trade
 local DONE_MESSAGE = "Done — added pets and ready." -- message to send in trade chat when finished
 local REQUEST_CHECK_POLL_INTERVAL = 0.6  -- seconds to poll GetAllRequests (fallback)
-local REQUEST_DETECT_TIMEOUT = 60        -- seconds to wait for incoming request before giving up
+local REQUEST_DETECT_TIMEOUT = 120        -- seconds to wait for incoming request before giving up
 
 -- Services & libraries
 local Players = game:GetService("Players")
